@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "atari_world_model"
+version = "0.1.0"
+description = "Offline Atari action-conditioned next-frame prediction world model"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Mayavan" }]
+keywords = ["atari", "world-model", "offline", "pytorch"]
+
+dependencies = [
+  "numpy>=1.26",
+  "torch>=2.2",
+  "gymnasium[atari,accept-rom-license]>=0.29.1",
+  "opencv-python>=4.8",
+  "imageio>=2.34",
+  "imageio-ffmpeg>=0.4.9",
+  "matplotlib>=3.8",
+  "tqdm>=4.66",
+  "pydantic>=2.6",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.6",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
