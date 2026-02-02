@@ -36,7 +36,7 @@ python -m src.train
 
 Override config values with dot notation:
 ```bash
-python -m src.train optimizer.lr=1e-4 model.condition=film train.max_steps=5
+python -m src.train optimizer.lr=1e-4 train.max_steps=5
 ```
 
 Evaluate:
@@ -81,6 +81,6 @@ python -m src.eval --checkpoint runs/.../ckpt.pt --game Pong --wandb_mode disabl
 
 ## What to modify (core logic practice)
 
-- `src/models/world_model.py`: action conditioning and alternative model variants (e.g., FiLM).
+- `src/models/world_model.py`: action conditioning and model variants.
 - `src/eval.py`: rollout logic, horizon aggregation, and metrics.
 - `src/utils/metrics.py`: add additional metrics or perceptual losses.

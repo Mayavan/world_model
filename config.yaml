@@ -7,16 +7,14 @@ experiment:
     entity: mayavan-projects
     mode: online
 
-model:
-  condition: concat
+model: {}
 
-optimizer:
-  lr: 0.001
+optimizer: {}
 
 scheduler:
   type: onecycle
   enabled: true
-  max_lr: 0.0
+  max_lr: 0.005
   pct_start: 0.3
   div_factor: 25.0
   final_div_factor: 10000.0
@@ -24,7 +22,7 @@ scheduler:
 data:
   data_dir: data/pong
   game: Pong
-  batch_size: 32
+  batch_size: 128
   num_workers: 2
   prefetch_factor: 2
   persistent_workers: true
@@ -36,8 +34,9 @@ train:
   max_steps: 0
   loss: huber
   delta: 1.0
-  log_every: 1000
-  val_every_steps: 10000
+  motion_weight: 10.0
+  log_every: 500
+  val_every_steps: 1000
   val_rollout_enabled: true
   val_rollout_horizon: 30
   val_rollout_fps: 30

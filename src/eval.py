@@ -39,8 +39,10 @@ def rollout_open_loop(
         action_t = torch.tensor([action], device=device, dtype=torch.int64)
 
         with torch.no_grad():
-            pred = model(obs_t, action_t)
-        pred_frame = pred.squeeze(0).squeeze(0).cpu().numpy()
+            next_pred = model(obs_t, action_t)
+        next_frame = next_pred.squeeze(0).squeeze(0).cpu().numpy()
+        # Clamp only when forming image frames/stack; next_frame is unconstrained.
+        pred_frame = np.clip(next_frame, 0.0, 1.0)
 
         next_obs, _, terminated, truncated, _ = env.step(action)
         gt_frame = next_obs[-1]
@@ -80,7 +82,7 @@ def evaluate(args: argparse.Namespace) -> None:
     num_actions = env.action_space.n
 
     ckpt = torch.load(args.checkpoint, map_location=device)
-    model = WorldModel(num_actions=num_actions, condition_mode=args.condition)
+    model = WorldModel(num_actions=num_actions)
     model.load_state_dict(ckpt["model"])
     model.to(device)
     model.eval()
@@ -160,7 +162,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--horizons", type=int, nargs="+", default=[1, 5, 10, 30])
     p.add_argument("--fps", type=int, default=30)
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--condition", type=str, default="concat", choices=["concat", "film"])
     p.add_argument("--cpu", action="store_true", help="Force CPU execution")
     p.add_argument("--wandb_project", type=str, default="atari_world_model")
     p.add_argument("--wandb_entity", type=str, default="mayavan-projects")

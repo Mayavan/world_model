@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
 from tqdm import tqdm
 import wandb
 
@@ -28,8 +29,6 @@ from src.utils.train_utils import (
 def train(cfg: dict) -> None:
     """Run a simple teacher-forced training loop and save checkpoints."""
     experiment = cfg["experiment"]
-    model_cfg = cfg["model"]
-    optimizer_cfg = cfg["optimizer"]
     scheduler_cfg = cfg["scheduler"]
     data_cfg = validate_data_config(cfg["data"])
     train_cfg = cfg["train"]
@@ -77,6 +76,7 @@ def train(cfg: dict) -> None:
     val_rollout_enabled = bool(train_cfg.get("val_rollout_enabled", True))
     val_rollout_horizon = int(train_cfg.get("val_rollout_horizon", 30))
     val_rollout_fps = int(train_cfg.get("val_rollout_fps", 30))
+    motion_weight = float(train_cfg.get("motion_weight", 10.0))
     val_rollout_ready = (
         val_loader is not None
         and int(train_cfg.get("val_every_steps", 0)) > 0
@@ -86,29 +86,31 @@ def train(cfg: dict) -> None:
     if val_rollout_ready:
         val_env = make_atari_env(data_cfg.game, seed=int(experiment["seed"]))
 
-    model = WorldModel(num_actions=num_actions, condition_mode=model_cfg["condition"])
+    model = WorldModel(num_actions=num_actions)
     model.to(device)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=float(optimizer_cfg["lr"]))
-    scheduler = None
-    if scheduler_cfg["enabled"] and scheduler_cfg["type"] == "onecycle":
-        total_steps = len(train_loader) * int(train_cfg["epochs"])
-        max_steps = int(train_cfg["max_steps"])
-        if max_steps > 0:
-            total_steps = min(total_steps, max_steps)
-        if total_steps <= 0:
-            raise ValueError("OneCycleLR requires at least 1 total step.")
-        max_lr = float(scheduler_cfg["max_lr"])
-        if max_lr <= 0:
-            max_lr = float(optimizer_cfg["lr"])
-        scheduler = torch.optim.lr_scheduler.OneCycleLR(
-            optimizer,
-            max_lr=max_lr,
-            total_steps=total_steps,
-            pct_start=float(scheduler_cfg["pct_start"]),
-            div_factor=float(scheduler_cfg["div_factor"]),
-            final_div_factor=float(scheduler_cfg["final_div_factor"]),
-        )
+    if not (scheduler_cfg["enabled"] and scheduler_cfg["type"] == "onecycle"):
+        raise ValueError("Scheduler must be enabled with type 'onecycle'.")
+    max_lr = float(scheduler_cfg["max_lr"])
+    if max_lr <= 0:
+        raise ValueError("OneCycleLR requires scheduler.max_lr > 0.")
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=max_lr)
+
+    total_steps = len(train_loader) * int(train_cfg["epochs"])
+    max_steps = int(train_cfg["max_steps"])
+    if max_steps > 0:
+        total_steps = min(total_steps, max_steps)
+    if total_steps <= 0:
+        raise ValueError("OneCycleLR requires at least 1 total step.")
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr=max_lr,
+        total_steps=total_steps,
+        pct_start=float(scheduler_cfg["pct_start"]),
+        div_factor=float(scheduler_cfg["div_factor"]),
+        final_div_factor=float(scheduler_cfg["final_div_factor"]),
+    )
 
     ckpt_dir = ensure_dir(Path(run_dir) / "checkpoints")
     image_dir = ensure_dir(Path(run_dir) / "images")
@@ -131,11 +133,22 @@ def train(cfg: dict) -> None:
             next_obs = next_obs.to(device)
 
             optimizer.zero_grad(set_to_none=True)
-            pred = model(obs, action)
+            next_pred = model(obs, action)
+            last_frame = obs[:, -1:, :, :]
+            delta_gt = next_obs - last_frame
+            abs_delta = delta_gt.abs()
+            motion_mask = (abs_delta > 0.02).float()
+            weights = 1.0 + motion_weight * motion_mask
             if train_cfg["loss"] == "huber":
-                loss = huber(pred, next_obs, delta=float(train_cfg["delta"]))
+                base_loss = F.huber_loss(
+                    next_pred,
+                    next_obs,
+                    delta=float(train_cfg["delta"]),
+                    reduction="none",
+                )
             else:
-                loss = mse(pred, next_obs)
+                base_loss = (next_pred - next_obs) ** 2
+            loss = (weights * base_loss).mean()
 
             loss.backward()
             optimizer.step()
@@ -152,7 +165,7 @@ def train(cfg: dict) -> None:
                     tag="train",
                     step=global_step,
                     obs=obs,
-                    pred=pred,
+                    next_pred=next_pred,
                     image_dir=image_dir,
                     wandb_run=wandb_run,
                 )
@@ -164,6 +177,7 @@ def train(cfg: dict) -> None:
                         device=device,
                         loss_name=str(train_cfg["loss"]),
                         delta=float(train_cfg["delta"]),
+                        motion_weight=motion_weight,
                     )
                     append_csv(val_metrics_path, [global_step, val_loss])
                     if wandb_run is not None:

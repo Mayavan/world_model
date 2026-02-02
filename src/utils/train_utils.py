@@ -8,9 +8,9 @@ from typing import Iterable
 import imageio.v2 as imageio
 import numpy as np
 import torch
+import torch.nn.functional as F
 import wandb
 
-from src.utils.metrics import huber, mse
 from src.utils.video import save_video_mp4, side_by_side
 
 
@@ -28,6 +28,7 @@ def run_validation(
     device: torch.device,
     loss_name: str,
     delta: float,
+    motion_weight: float,
 ) -> tuple[float, np.ndarray | None]:
     """Evaluate the model on the validation loader and return average loss and viz."""
     model.eval()
@@ -39,13 +40,26 @@ def run_validation(
             obs = obs.to(device)
             action = action.to(device)
             next_obs = next_obs.to(device)
-            pred = model(obs, action)
+            next_pred = model(obs, action)
+            last_frame = obs[:, -1:, :, :]
+            delta_gt = next_obs - last_frame
+            assert next_pred.shape == next_obs.shape, "next_pred must match next_obs shape"
+            abs_delta = delta_gt.abs()
+            motion_mask = (abs_delta > 0.02).float()
+            weights = 1.0 + motion_weight * motion_mask
             if loss_name == "huber":
-                loss = huber(pred, next_obs, delta=delta)
+                base_loss = F.huber_loss(
+                    next_pred,
+                    next_obs,
+                    delta=delta,
+                    reduction="none",
+                )
             else:
-                loss = mse(pred, next_obs)
+                base_loss = (next_pred - next_obs) ** 2
+            loss = (weights * base_loss).mean()
             if viz_image is None:
-                viz_image = build_viz_image(obs, pred)
+                next_pred = torch.clamp(next_pred, 0.0, 1.0)
+                viz_image = build_viz_image(obs, next_pred)
             batch_size = int(obs.shape[0])
             total_loss += float(loss.item()) * batch_size
             total_samples += batch_size
@@ -55,10 +69,10 @@ def run_validation(
     return total_loss / total_samples, viz_image
 
 
-def build_viz_image(obs: torch.Tensor, pred: torch.Tensor) -> np.ndarray:
+def build_viz_image(obs: torch.Tensor, next_pred: torch.Tensor) -> np.ndarray:
     """Create a grayscale strip of input frames plus predicted frame."""
     obs_np = obs.detach().cpu().numpy()
-    pred_np = pred.detach().cpu().numpy()
+    pred_np = next_pred.detach().cpu().numpy()
     frames = [np.clip(f, 0.0, 1.0) for f in obs_np[0]]
     frames.append(np.clip(pred_np[0, 0], 0.0, 1.0))
     return np.concatenate(frames, axis=1)
@@ -69,12 +83,15 @@ def log_prediction_image(
     tag: str,
     step: int,
     obs: torch.Tensor,
-    pred: torch.Tensor,
+    next_pred: torch.Tensor,
     image_dir: Path,
     wandb_run,
 ) -> None:
     """Save and optionally log a visualization image."""
-    image = build_viz_image(obs, pred)
+    with torch.no_grad():
+        # Clamp is only for visualization; next_pred remains unconstrained.
+        next_pred = torch.clamp(next_pred, 0.0, 1.0)
+        image = build_viz_image(obs, next_pred)
     save_image(tag=tag, step=step, image=image, image_dir=image_dir, wandb_run=wandb_run)
 
 
@@ -119,8 +136,10 @@ def run_rollout_video(
             action = env.action_space.sample()
             obs_t = torch.from_numpy(pred_stack).unsqueeze(0).to(device)
             action_t = torch.tensor([action], device=device, dtype=torch.int64)
-            pred = model(obs_t, action_t)
-            pred_frame = pred.squeeze(0).squeeze(0).cpu().numpy()
+            next_pred = model(obs_t, action_t)
+            next_frame = next_pred.squeeze(0).squeeze(0).cpu().numpy()
+            # Clamp only when forming image frames/stack; next_frame is unconstrained.
+            pred_frame = np.clip(next_frame, 0.0, 1.0)
 
             next_obs, _, terminated, truncated, _ = env.step(action)
             gt_frame = next_obs[-1]
