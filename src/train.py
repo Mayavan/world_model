@@ -80,7 +80,10 @@ def train(cfg: dict) -> None:
     val_rollout_horizon = int(train_cfg.get("val_rollout_horizon", 30))
     val_rollout_fps = int(train_cfg.get("val_rollout_fps", 30))
     motion_tau = float(train_cfg.get("motion_tau", 0.02))
-    motion_alpha = float(train_cfg.get("motion_alpha", train_cfg.get("motion_weight", 10.0)))
+    motion_weight = float(train_cfg.get("motion_weight", 10.0))
+    motion_dilate_px = int(train_cfg.get("motion_dilate_px", 5))
+    if motion_dilate_px < 0:
+        raise ValueError("train.motion_dilate_px must be >= 0.")
     val_rollout_ready = (
         val_loader is not None
         and int(train_cfg.get("val_every_steps", 0)) > 0
@@ -156,7 +159,13 @@ def train(cfg: dict) -> None:
             last_frame = obs[:, -1:, :, :]
             motion = (next_obs - last_frame).abs() > motion_tau
             motion = motion.float()
-            weights = 1.0 + motion_alpha * motion
+            motion = F.max_pool2d(
+                motion,
+                kernel_size=2 * motion_dilate_px + 1,
+                stride=1,
+                padding=motion_dilate_px,
+            )
+            weights = 1.0 + motion_weight * motion
             weights = weights / weights.mean().clamp_min(1e-6)
             loss_map = F.binary_cross_entropy_with_logits(
                 logits,
@@ -202,7 +211,8 @@ def train(cfg: dict) -> None:
                         loader=val_loader,
                         device=device,
                         motion_tau=motion_tau,
-                        motion_alpha=motion_alpha,
+                        motion_weight=motion_weight,
+                        motion_dilate_px=motion_dilate_px,
                     )
                     append_csv(val_metrics_path, [global_step, val_loss])
                     if wandb_run is not None:

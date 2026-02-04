@@ -34,6 +34,18 @@ def save_gif(frames: Iterable[np.ndarray], path: str | Path, fps: int = 30) -> N
     imageio.mimsave(path, [_to_uint8(f) for f in frames], duration=duration)
 
 
+def _add_border(frame: np.ndarray, border: int = 1) -> np.ndarray:
+    """Add a thin border around a frame to preserve edge details in video codecs."""
+    if border <= 0:
+        return frame
+    if frame.dtype == np.uint8:
+        value = 128
+    else:
+        value = 0.5
+    pad_width = ((border, border), (border, border), (0, 0))
+    return np.pad(frame, pad_width, mode="constant", constant_values=value)
+
+
 def side_by_side(gt: np.ndarray, pred: np.ndarray) -> np.ndarray:
     """Stack two frames horizontally. Frames are HxW or HxWxC in [0,1] or uint8."""
     if gt.ndim == 2:
@@ -44,4 +56,6 @@ def side_by_side(gt: np.ndarray, pred: np.ndarray) -> np.ndarray:
         gt = np.repeat(gt, 3, axis=2)
     if pred.shape[2] == 1:
         pred = np.repeat(pred, 3, axis=2)
+    gt = _add_border(gt, border=1)
+    pred = _add_border(pred, border=1)
     return np.concatenate([gt, pred], axis=1)

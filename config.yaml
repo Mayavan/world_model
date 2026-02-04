@@ -8,7 +8,7 @@ experiment:
     mode: online
 
 model:
-  width_mult: 2.0
+  width_mult: 1.0
 
 optimizer: {}
 
@@ -38,9 +38,9 @@ train:
   max_steps: 0
   loss: bce_logits
   delta: 1.0
-  motion_weight: 10.0
+  motion_weight: 5.0
   motion_tau: 0.02
-  motion_alpha: 10.0
+  motion_dilate_px: 4
   debug_steps: 5
   log_every: 500
   val_every_steps: 1000

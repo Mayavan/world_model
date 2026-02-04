@@ -28,7 +28,8 @@ def run_validation(
     loader: Iterable,
     device: torch.device,
     motion_tau: float,
-    motion_alpha: float,
+    motion_weight: float,
+    motion_dilate_px: int,
 ) -> tuple[float, np.ndarray | None]:
     """Evaluate the model on the validation loader and return average loss and viz."""
     model.eval()
@@ -46,7 +47,13 @@ def run_validation(
             assert logits.shape == next_obs.shape, "logits must match next_obs shape"
             motion = (next_obs - last_frame).abs() > motion_tau
             motion = motion.float()
-            weights = 1.0 + motion_alpha * motion
+            motion = F.max_pool2d(
+                motion,
+                kernel_size=2 * motion_dilate_px + 1,
+                stride=1,
+                padding=motion_dilate_px,
+            )
+            weights = 1.0 + motion_weight * motion
             weights = weights / weights.mean().clamp_min(1e-6)
             loss_map = F.binary_cross_entropy_with_logits(
                 logits,
@@ -131,10 +138,26 @@ def run_rollout_video(
     n_past_frames = int(getattr(model, "n_past_frames", obs.shape[0]))
     n_past_actions = int(getattr(model, "n_past_actions", 0))
     n_future_frames = int(getattr(model, "n_future_frames", 1))
+
+    # Build a real input stack with actual actions (no zero padding).
     pred_stack = obs[-n_past_frames:].copy()
-    past_actions = deque([0] * n_past_actions, maxlen=n_past_actions)
+    action_history: list[int] = []
+    warmup_needed = max(0, n_past_frames - 1)
+    while len(action_history) < warmup_needed:
+        action = env.action_space.sample()
+        next_obs, _, terminated, truncated, _ = env.step(action)
+        action_history.append(int(action))
+        pred_stack = next_obs[-n_past_frames:].copy()
+        if terminated or truncated:
+            obs, _ = env.reset()
+            pred_stack = obs[-n_past_frames:].copy()
+            action_history.clear()
+    past_actions = deque(action_history[-n_past_actions:], maxlen=n_past_actions)
 
     frames: list[np.ndarray] = []
+    # First frame: last input frame on both sides (gt|pred format).
+    last_input = pred_stack[-1]
+    frames.append(side_by_side(last_input, last_input))
     with torch.no_grad():
         for _ in range(horizon):
             future_actions = [env.action_space.sample() for _ in range(n_future_frames)]

@@ -32,10 +32,26 @@ def rollout_open_loop(
     n_past_frames = int(getattr(model, "n_past_frames", obs.shape[0]))
     n_past_actions = int(getattr(model, "n_past_actions", 0))
     n_future_frames = int(getattr(model, "n_future_frames", 1))
+
+    # Build a real input stack with actual actions (no zero padding).
     pred_stack = obs[-n_past_frames:].copy()
-    past_actions = deque([0] * n_past_actions, maxlen=n_past_actions)
+    action_history: list[int] = []
+    warmup_needed = max(0, n_past_frames - 1)
+    while len(action_history) < warmup_needed:
+        action = env.action_space.sample()
+        next_obs, _, terminated, truncated, _ = env.step(action)
+        action_history.append(int(action))
+        pred_stack = next_obs[-n_past_frames:].copy()
+        if terminated or truncated:
+            obs, _ = env.reset()
+            pred_stack = obs[-n_past_frames:].copy()
+            action_history.clear()
+    past_actions = deque(action_history[-n_past_actions:], maxlen=n_past_actions)
 
     frames: List[np.ndarray] = []
+    if capture_video:
+        last_input = pred_stack[-1]
+        frames.append(side_by_side(last_input, last_input))
 
     last_mse = 0.0
     for _ in range(horizon):
