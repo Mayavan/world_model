@@ -11,7 +11,7 @@ fi
 source "${VENV_DIR}/bin/activate"
 
 python -m pip install --upgrade pip
-python -m pip install -e ".[dev]"
+python -m pip install -e ".[dev,procgen]"
 
 echo "Virtual environment ready."
 echo "To activate later: source ${VENV_DIR}/bin/activate"

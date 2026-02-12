@@ -194,16 +194,6 @@ def train(cfg: dict) -> None:
                     image_dir=image_dir,
                     wandb_run=wandb_run,
                 )
-            if global_step < int(train_cfg.get("debug_steps", 5)):
-                pred = torch.sigmoid(logits)
-                print(
-                    "debug",
-                    f"step={global_step}",
-                    f"motion_mean={float(motion.mean().item()):.6f}",
-                    f"loss={float(loss.item()):.6f}",
-                    f"logits_abs_mean={float(logits.abs().mean().item()):.6f}",
-                    f"pred_mean={float(pred.mean().item()):.6f}",
-                )
             if val_loader is not None and int(train_cfg["val_every_steps"]) > 0:
                 if global_step % int(train_cfg["val_every_steps"]) == 0:
                     val_loss, val_viz = run_validation(

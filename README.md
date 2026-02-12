@@ -9,6 +9,9 @@ Offline next-frame prediction world model using Gymnasium and PyTorch. This repo
 source .venv/bin/activate
 ```
 
+`scripts/setup_venv.sh` installs core + dev dependencies and Procgen when the
+Python version is compatible. Procgen currently requires Python `<3.11`.
+
 Later, you can activate with:
 ```bash
 ./scripts/activate_venv.sh
@@ -20,6 +23,8 @@ Generate dataset (random policy):
 ```bash
 python -m src.dataset.generate_dataset --game coinrun --steps 300000 --out_dir data/coinrun
 ```
+
+Note: CoinRun/Procgen commands require Procgen support (Python `<3.11`).
 
 Train (uses `config.yaml`):
 ```bash

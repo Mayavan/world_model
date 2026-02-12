@@ -2,12 +2,16 @@ from __future__ import annotations
 
 """Procgen environment wrappers for preprocessing and frame stacking."""
 
+import importlib.util
+import logging
 from collections import deque
 from typing import Deque, Optional
 
 import gymnasium as gym
 import numpy as np
-from gymnasium.wrappers import GrayscaleObservation, ResizeObservation
+from PIL import Image
+
+logger = logging.getLogger(__name__)
 
 
 class StepAPICompatibility(gym.Wrapper):
@@ -37,7 +41,7 @@ class ExtractRGB(gym.ObservationWrapper):
     def __init__(self, env: gym.Env):
         super().__init__(env)
         space = env.observation_space
-        if not isinstance(space, gym.spaces.Dict) or "rgb" not in space.spaces:
+        if not hasattr(space, "spaces") or "rgb" not in space.spaces:
             raise ValueError("ExtractRGB requires a Dict observation space with key 'rgb'.")
         self.observation_space = space.spaces["rgb"]
 
@@ -63,6 +67,30 @@ class FloatNormalize(gym.ObservationWrapper):
         if obs.max() > 1.0:
             obs = obs / 255.0
         return obs
+
+
+class GrayscaleResize(gym.ObservationWrapper):
+    """Convert RGB observations to grayscale and resize to (84, 84)."""
+
+    def __init__(self, env: gym.Env, shape: tuple[int, int] = (84, 84)):
+        super().__init__(env)
+        self.shape = shape
+        self.observation_space = gym.spaces.Box(
+            low=0,
+            high=255,
+            shape=shape,
+            dtype=np.uint8,
+        )
+
+    def observation(self, observation):
+        obs = np.asarray(observation)
+        if obs.ndim == 3 and obs.shape[-1] == 3:
+            gray = np.asarray(Image.fromarray(obs).convert("L").resize(self.shape, Image.BILINEAR))
+        elif obs.ndim == 2:
+            gray = np.asarray(Image.fromarray(obs).resize(self.shape, Image.BILINEAR))
+        else:
+            raise ValueError(f"Unexpected observation shape for GrayscaleResize: {obs.shape}")
+        return gray.astype(np.uint8)
 
 
 class FrameStack(gym.Wrapper):
@@ -91,6 +119,58 @@ class FrameStack(gym.Wrapper):
         return np.stack(self.frames, axis=0)
 
 
+class LegacyResetNoSeed(gym.Wrapper):
+    """Legacy Procgen reset() does not accept seed/options kwargs."""
+
+    def reset(self, **kwargs):
+        kwargs.pop("seed", None)
+        kwargs.pop("options", None)
+        return self.env.reset(**kwargs)
+
+
+class _LegacyGymRenderModeProxy:
+    """Attach render_mode for shim wrappers expecting Gymnasium fields."""
+
+    def __init__(self, env, render_mode: Optional[str]):
+        self._env = env
+        self.render_mode = render_mode
+
+    def __getattr__(self, name):
+        return getattr(self._env, name)
+
+
+def _module_available(module_name: str) -> bool:
+    return importlib.util.find_spec(module_name) is not None
+
+
+def _find_env_id_in_gymnasium(game: str) -> str | None:
+    env_ids = (
+        f"procgen-{game.lower()}-v0",
+        f"procgen:procgen-{game.lower()}-v0",
+    )
+    registry = gym.registry
+    for env_id in env_ids:
+        if env_id in registry:
+            return env_id
+    return None
+
+
+def _find_env_id_in_legacy_gym(game: str) -> str | None:
+    if not _module_available("gym"):
+        return None
+    import gym as old_gym  # type: ignore
+
+    env_ids = (
+        f"procgen-{game.lower()}-v0",
+        f"procgen:procgen-{game.lower()}-v0",
+    )
+    registry = old_gym.envs.registry
+    for env_id in env_ids:
+        if env_id in registry:
+            return env_id
+    return None
+
+
 def make_procgen_env(
     game: str,
     seed: Optional[int] = None,
@@ -100,54 +180,72 @@ def make_procgen_env(
     num_levels: int = 0,
 ) -> gym.Env:
     """Create a preprocessed Procgen environment."""
-    try:
-        import procgen  # noqa: F401
-    except ImportError as e:
-        raise RuntimeError(
-            "Procgen is not installed. Run: pip install procgen"
-        ) from e
+    import procgen  # noqa: F401
+    logger.info("Imported procgen module and registered environments")
 
-    env_id_candidates = [
-        f"procgen-{game.lower()}-v0",
-        f"procgen:procgen-{game.lower()}-v0",
-    ]
-    env = None
-    last_error: Exception | None = None
-    for env_id in env_id_candidates:
-        try:
-            env = gym.make(
-                env_id,
-                render_mode=render_mode,
-                distribution_mode=distribution_mode,
-                num_levels=num_levels,
-                start_level=0 if seed is None else int(seed),
-            )
-            break
-        except Exception as e:  # noqa: BLE001
-            last_error = e
-            continue
-    if env is None:
-        raise RuntimeError(
-            f"Unable to create Procgen env for game='{game}'. "
-            f"Tried IDs: {env_id_candidates}. Last error: {last_error}"
+    env_id = _find_env_id_in_gymnasium(game)
+    uses_legacy = False
+    if env_id is not None:
+        logger.info("Creating Procgen env via Gymnasium id '%s'", env_id)
+        env = gym.make(
+            env_id,
+            render_mode=render_mode,
+            distribution_mode=distribution_mode,
+            num_levels=num_levels,
+            start_level=0 if seed is None else int(seed),
         )
+    else:
+        legacy_env_id = _find_env_id_in_legacy_gym(game)
+        if legacy_env_id is None:
+            raise RuntimeError(f"Unable to find Procgen env id for game='{game}'.")
+        if not _module_available("shimmy"):
+            raise RuntimeError(
+                "Legacy Procgen env detected but shimmy is missing. "
+                "Install optional deps: `pip install -e '.[procgen]'`."
+            )
+        import gym as old_gym  # type: ignore
+        from shimmy import GymV21CompatibilityV0
 
+        logger.warning(
+            "Using legacy Gym Procgen id '%s' via shimmy compatibility wrapper",
+            legacy_env_id,
+        )
+        old_env = old_gym.make(
+            legacy_env_id,
+            distribution_mode=distribution_mode,
+            num_levels=num_levels,
+            start_level=0 if seed is None else int(seed),
+        )
+        env = GymV21CompatibilityV0(env=_LegacyGymRenderModeProxy(old_env, render_mode))
+        uses_legacy = True
+
+    logger.info("Applying Procgen preprocessing wrappers")
+    if uses_legacy:
+        env = LegacyResetNoSeed(env)
     env = StepAPICompatibility(env)
-    if isinstance(env.observation_space, gym.spaces.Dict):
+    if hasattr(env.observation_space, "spaces") and "rgb" in env.observation_space.spaces:
+        logger.info("Extracting 'rgb' key from dict observation space")
         env = ExtractRGB(env)
-    env = GrayscaleObservation(env, keep_dim=False)
-    env = ResizeObservation(env, shape=(84, 84))
+    env = GrayscaleResize(env, shape=(84, 84))
     env = FloatNormalize(env)
     env = FrameStack(env, k=frame_stack)
 
     if seed is not None:
-        try:
-            env.reset(seed=int(seed))
-        except TypeError:
+        logger.info("Seeding environment with seed=%d", int(seed))
+        if uses_legacy:
             env.reset()
-        try:
-            env.action_space.seed(int(seed))
-        except Exception:
-            pass
+        else:
+            env.reset(seed=int(seed))
+        env.action_space.seed(int(seed))
+    else:
+        logger.info("No seed provided")
 
+    obs_space = env.observation_space
+    if not isinstance(obs_space, gym.spaces.Box) or obs_space.shape != (frame_stack, 84, 84):
+        raise RuntimeError(
+            "Unexpected observation space after Procgen wrappers. "
+            f"Got {obs_space}."
+        )
+
+    logger.info("Procgen env ready: obs_shape=%s action_space=%s", obs_space.shape, env.action_space)
     return env

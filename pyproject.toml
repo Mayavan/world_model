@@ -13,12 +13,12 @@ authors = [{ name = "Mayavan" }]
 keywords = ["world-model", "offline", "pytorch"]
 
 dependencies = [
-  "numpy>=1.26",
+  "numpy>=1.26,<2",
   "torch>=2.2",
   "gymnasium>=0.29.1",
-  "procgen>=0.10.7",
   "imageio>=2.34",
-  "imageio-ffmpeg>=0.4.9",
+  "imageio-ffmpeg>=0.3,<0.4; python_version < '3.11'",
+  "imageio-ffmpeg>=0.4.9; python_version >= '3.11'",
   "matplotlib>=3.8",
   "pyyaml>=6.0",
   "tqdm>=4.66",
@@ -29,6 +29,10 @@ dependencies = [
 dev = [
   "pytest>=8.0",
   "ruff>=0.6",
+]
+procgen = [
+  "procgen>=0.10.7; python_version < '3.11'",
+  "shimmy>=2.0.0; python_version < '3.11'",
 ]
 
 [tool.setuptools]
