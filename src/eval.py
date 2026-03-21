@@ -18,56 +18,15 @@ from src.metrics.rollout import save_rollout_metric_plot
 from src.models.registry import build_model_from_checkpoint_cfg
 from src.utils.contracts import validate_rollout_prediction, validate_rollout_stack
 from src.utils.io import append_csv, ensure_dir, init_csv, timestamp_dir
+from src.utils.rollout_helpers import (
+    first_frame_from_prediction,
+    latest_frame_from_env_stack,
+    stack_to_model_obs,
+    update_rollout_stack,
+)
 from src.utils.seed import set_seed
 from src.utils.video import save_gif, save_video_mp4, side_by_side
 
-
-def _stack_to_model_obs(
-    pred_stack: np.ndarray,
-    *,
-    frame_channels: int,
-    device: torch.device,
-) -> torch.Tensor:
-    if frame_channels == 3:
-        if pred_stack.ndim != 4 or pred_stack.shape[-1] != 3:
-            raise ValueError(f"Expected RGB stack shape (T,H,W,3), got {pred_stack.shape}")
-        packed = np.transpose(pred_stack, (0, 3, 1, 2)).reshape(
-            pred_stack.shape[0] * 3,
-            pred_stack.shape[1],
-            pred_stack.shape[2],
-        )
-    elif frame_channels == 1:
-        if pred_stack.ndim != 3:
-            raise ValueError(f"Expected grayscale stack shape (T,H,W), got {pred_stack.shape}")
-        packed = pred_stack
-    else:
-        raise ValueError(f"Unsupported frame_channels={frame_channels}")
-    return torch.from_numpy(packed).unsqueeze(0).to(device=device, dtype=torch.float32)
-
-
-def _latest_frame_from_env_stack(stack: np.ndarray, *, frame_channels: int) -> np.ndarray:
-    frame = stack[-1]
-    if frame_channels == 3:
-        if frame.ndim != 3 or frame.shape[-1] != 3:
-            raise ValueError(f"Expected RGB frame (H,W,3), got {frame.shape}")
-        return frame
-    if frame_channels == 1:
-        if frame.ndim != 2:
-            raise ValueError(f"Expected grayscale frame (H,W), got {frame.shape}")
-        return frame
-    raise ValueError(f"Unsupported frame_channels={frame_channels}")
-
-
-def _first_frame_from_prediction(pred: torch.Tensor, *, frame_channels: int) -> np.ndarray:
-    pred_np = pred.detach().cpu().float().clamp(0.0, 1.0).numpy()
-    if pred_np.ndim != 4:
-        raise ValueError(f"Expected rank-4 BCHW prediction, got shape={pred_np.shape}")
-    first = pred_np[0, :frame_channels]
-    if frame_channels == 1:
-        return first[0]
-    if frame_channels == 3:
-        return np.transpose(first, (1, 2, 0))
-    raise ValueError(f"Unsupported frame_channels={frame_channels}")
 
 
 def rollout_open_loop(
@@ -106,7 +65,7 @@ def rollout_open_loop(
 
     frames: List[np.ndarray] = []
     if capture_video:
-        last_input = _latest_frame_from_env_stack(pred_stack, frame_channels=frame_channels)
+        last_input = latest_frame_from_env_stack(pred_stack, frame_channels=frame_channels)
         frames.append(side_by_side(last_input, last_input))
 
     last_mse = 0.0
@@ -114,7 +73,7 @@ def rollout_open_loop(
     for _ in range(horizon):
         future_actions = [env.action_space.sample() for _ in range(n_future_frames)]
         action = future_actions[0]
-        obs_t = _stack_to_model_obs(pred_stack, frame_channels=frame_channels, device=device)
+        obs_t = stack_to_model_obs(pred_stack, frame_channels=frame_channels, device=device)
         future_t = torch.tensor([future_actions], device=device, dtype=torch.int64)
         past_t = torch.tensor([list(past_actions)], device=device, dtype=torch.int64)
 
@@ -131,10 +90,10 @@ def rollout_open_loop(
                 height=pred_stack.shape[1],
                 width=pred_stack.shape[2],
             )
-        pred_frame = _first_frame_from_prediction(pred, frame_channels=frame_channels)
+        pred_frame = first_frame_from_prediction(pred, frame_channels=frame_channels)
 
         next_obs, _, terminated, truncated, _ = env.step(action)
-        gt_frame = _latest_frame_from_env_stack(next_obs, frame_channels=frame_channels)
+        gt_frame = latest_frame_from_env_stack(next_obs, frame_channels=frame_channels)
 
         if frame_channels == 3:
             pred_metric = torch.from_numpy(pred_frame).permute(2, 0, 1)
@@ -151,7 +110,7 @@ def rollout_open_loop(
         if capture_video:
             frames.append(side_by_side(gt_frame, pred_frame))
 
-        pred_stack = np.concatenate([pred_stack[1:], pred_frame[None, ...]], axis=0)
+        pred_stack = update_rollout_stack(pred_stack, pred_frame)
         if n_past_actions > 0:
             past_actions.append(action)
 

@@ -47,6 +47,19 @@ Evaluate:
 python -m src.eval --checkpoint runs/.../ckpt.pt --game coinrun
 ```
 
+Interactive dataset-seeded rollout:
+```bash
+python -m src.rollout_cli \
+  --checkpoint runs/.../ckpt.pt \
+  --data_dir data/coinrun_rgb \
+  --sample_idx 0
+```
+
+Notes:
+- Enter a single action id to repeat that action across the model's `n_future_frames` plan.
+- Or enter a comma-separated action sequence of length `n_future_frames`.
+- The session is seeded from an offline dataset window, then rolls forward using model predictions.
+
 ### Weights & Biases
 Enable W&B logging for training and evaluation:
 

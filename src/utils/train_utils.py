@@ -19,6 +19,13 @@ from src.utils.contracts import (
     validate_rollout_stack,
     validate_supervised_batch,
 )
+from src.utils.rollout_helpers import (
+    first_frame_from_prediction,
+    latest_frame_from_env_stack,
+    packed_channels_to_frames,
+    stack_to_model_obs,
+    update_rollout_stack,
+)
 from src.utils.video import save_video_mp4, side_by_side
 
 
@@ -36,77 +43,6 @@ def parse_train_cli(
 def _frame_channels_for_model(model: torch.nn.Module) -> int:
     return int(getattr(model, "frame_channels", 1))
 
-
-def _packed_channels_to_frames(x: np.ndarray, *, frame_channels: int) -> list[np.ndarray]:
-    if x.ndim != 3:
-        raise ValueError(f"Expected CHW tensor for frame unpacking, got shape={x.shape}")
-    channels, height, width = x.shape
-    if channels % frame_channels != 0:
-        raise ValueError(
-            f"Expected channel count divisible by frame_channels={frame_channels}, got {channels}"
-        )
-    frame_count = channels // frame_channels
-    frames: list[np.ndarray] = []
-    for idx in range(frame_count):
-        frame_chw = x[idx * frame_channels : (idx + 1) * frame_channels]
-        if frame_channels == 1:
-            frame = np.repeat(frame_chw[0][:, :, None], 3, axis=2)
-        elif frame_channels == 3:
-            frame = np.transpose(frame_chw, (1, 2, 0))
-        else:
-            raise ValueError(f"Unsupported frame_channels={frame_channels}")
-        if frame.shape[:2] != (height, width):
-            raise ValueError(f"Unexpected frame shape={frame.shape}")
-        frames.append(np.clip(frame, 0.0, 1.0))
-    return frames
-
-
-def _stack_to_model_obs(
-    pred_stack: np.ndarray,
-    *,
-    frame_channels: int,
-    device: torch.device,
-) -> torch.Tensor:
-    if frame_channels == 3:
-        if pred_stack.ndim != 4 or pred_stack.shape[-1] != 3:
-            raise ValueError(f"Expected RGB stack (T,H,W,3), got shape={pred_stack.shape}")
-        packed = np.transpose(pred_stack, (0, 3, 1, 2)).reshape(
-            pred_stack.shape[0] * 3,
-            pred_stack.shape[1],
-            pred_stack.shape[2],
-        )
-    elif frame_channels == 1:
-        if pred_stack.ndim != 3:
-            raise ValueError(f"Expected grayscale stack (T,H,W), got shape={pred_stack.shape}")
-        packed = pred_stack
-    else:
-        raise ValueError(f"Unsupported frame_channels={frame_channels}")
-    return torch.from_numpy(packed).unsqueeze(0).to(device=device, dtype=torch.float32)
-
-
-def _first_frame_from_packed_prediction(pred: torch.Tensor, *, frame_channels: int) -> np.ndarray:
-    pred_np = pred.detach().cpu().float().clamp(0.0, 1.0).numpy()
-    if pred_np.ndim != 4:
-        raise ValueError(f"Expected rank-4 BCHW prediction, got shape={pred_np.shape}")
-    first = pred_np[0, :frame_channels]
-    if frame_channels == 1:
-        return first[0]
-    if frame_channels == 3:
-        return np.transpose(first, (1, 2, 0))
-    raise ValueError(f"Unsupported frame_channels={frame_channels}")
-
-
-def _latest_frame_from_env_stack(stack: np.ndarray, *, frame_channels: int) -> np.ndarray:
-    last = stack[-1]
-    if frame_channels == 3:
-        if last.ndim != 3 or last.shape[-1] != 3:
-            raise ValueError(f"Expected RGB frame shape (H,W,3), got {last.shape}")
-        return last
-    if frame_channels == 1:
-        if last.ndim != 2:
-            raise ValueError(f"Expected grayscale frame shape (H,W), got {last.shape}")
-        return last
-    raise ValueError(f"Unsupported frame_channels={frame_channels}")
 
 
 def run_validation(
@@ -174,8 +110,8 @@ def build_viz_image(obs: torch.Tensor, next_pred: torch.Tensor, *, frame_channel
     """Create a strip of input frames plus predicted frames."""
     obs_np = obs[0].detach().cpu().float().clamp(0.0, 1.0).numpy()
     pred_np = next_pred[0].detach().cpu().float().clamp(0.0, 1.0).numpy()
-    frames = _packed_channels_to_frames(obs_np, frame_channels=frame_channels)
-    frames.extend(_packed_channels_to_frames(pred_np, frame_channels=frame_channels))
+    frames = packed_channels_to_frames(obs_np, frame_channels=frame_channels)
+    frames.extend(packed_channels_to_frames(pred_np, frame_channels=frame_channels))
     return np.concatenate(frames, axis=1)
 
 
@@ -258,13 +194,13 @@ def run_rollout_video(
     horizons: list[int] = []
     mse_by_horizon: list[float] = []
     psnr_by_horizon: list[float] = []
-    last_input = _latest_frame_from_env_stack(pred_stack, frame_channels=frame_channels)
+    last_input = latest_frame_from_env_stack(pred_stack, frame_channels=frame_channels)
     frames.append(side_by_side(last_input, last_input))
     with torch.no_grad():
         for _ in range(horizon):
             future_actions = [env.action_space.sample() for _ in range(n_future_frames)]
             action = future_actions[0]
-            obs_t = _stack_to_model_obs(pred_stack, frame_channels=frame_channels, device=device)
+            obs_t = stack_to_model_obs(pred_stack, frame_channels=frame_channels, device=device)
             future_t = torch.tensor([future_actions], device=device, dtype=torch.int64)
             past_t = torch.tensor([list(past_actions)], device=device, dtype=torch.int64)
             pred = model.sample_future(
@@ -279,10 +215,10 @@ def run_rollout_video(
                 height=pred_stack.shape[1],
                 width=pred_stack.shape[2],
             )
-            pred_frame = _first_frame_from_packed_prediction(pred, frame_channels=frame_channels)
+            pred_frame = first_frame_from_prediction(pred, frame_channels=frame_channels)
 
             next_obs, _, terminated, truncated, _ = env.step(action)
-            gt_frame = _latest_frame_from_env_stack(next_obs, frame_channels=frame_channels)
+            gt_frame = latest_frame_from_env_stack(next_obs, frame_channels=frame_channels)
             frames.append(side_by_side(gt_frame, pred_frame))
             if frame_channels == 3:
                 pred_metric = torch.from_numpy(pred_frame).permute(2, 0, 1)
@@ -299,7 +235,7 @@ def run_rollout_video(
             mse_by_horizon.append(mse)
             psnr_by_horizon.append(psnr)
 
-            pred_stack = np.concatenate([pred_stack[1:], pred_frame[None, ...]], axis=0)
+            pred_stack = update_rollout_stack(pred_stack, pred_frame)
             if n_past_actions > 0:
                 past_actions.append(action)
             if terminated or truncated:
