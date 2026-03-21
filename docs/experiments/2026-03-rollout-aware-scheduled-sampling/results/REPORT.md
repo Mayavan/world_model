@@ -18,32 +18,6 @@
 | 20 | 0.030487 | 0.114955 | 15.159 | 9.395 |
 | 32 | 0.157678 | 0.178039 | 8.022 | 7.495 |
 
-## Analysis
-
-This rollout-aware scheduled-sampling variant did **not** beat the baseline overall.
-
-Key takeaways:
-- Supervised validation regressed at the final checkpoint:
-  - baseline `val_mse=0.004818`, experiment `val_mse=0.006118`
-  - baseline `val_psnr=23.203`, experiment `val_psnr=22.160`
-- Short-horizon rollout was mixed:
-  - at horizon 5 the experiment was roughly on par with the baseline
-  - at horizon 1 it was clearly worse
-- Medium and long horizons degraded substantially:
-  - horizon 10: experiment MSE `0.028426` vs baseline `0.010365`
-  - horizon 20: experiment MSE `0.114955` vs baseline `0.030487`
-  - horizon 32: experiment MSE `0.178039` vs baseline `0.157678`
-
-Most likely interpretation:
-- this auxiliary rollout loss was too weak to improve long-horizon stability,
-- while the scheduled-sampling exposure introduced enough off-manifold context to hurt both one-step validation and medium-horizon rollout quality.
-
-Recommended next follow-ups:
-1. try a later/shallower scheduled-sampling ramp,
-2. reduce the rollout auxiliary loss weight,
-3. train directly in latent-space for multi-step consistency rather than decoded-frame MSE,
-4. compare against a stronger temporal backbone before investing further in this exact schedule.
-
 ## Notes
 
 - Compare `validation_curves.png` for overall supervised validation behavior.

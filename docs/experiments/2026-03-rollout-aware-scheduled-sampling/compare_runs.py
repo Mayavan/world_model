@@ -71,6 +71,7 @@ def plot_rollout_curves(
     title_suffix: str,
 ) -> None:
     horizons = [row["horizon"] for row in baseline_rows]
+    slug = title_suffix.replace(' ', '_').lower()
 
     plt.figure(figsize=(10, 4))
     plt.subplot(1, 2, 1)
@@ -92,7 +93,31 @@ def plot_rollout_curves(
     plt.legend()
 
     plt.tight_layout()
-    plt.savefig(out_dir / f"rollout_curves_{title_suffix.replace(' ', '_').lower()}.png", dpi=160)
+    plt.savefig(out_dir / f"rollout_curves_{slug}.png", dpi=160)
+    plt.close()
+
+    plt.figure(figsize=(6, 4))
+    plt.plot(horizons, [row["mse"] for row in baseline_rows], label="baseline", linewidth=2)
+    plt.plot(horizons, [row["mse"] for row in experiment_rows], label="rollout-aware", linewidth=2)
+    plt.xlabel("Horizon")
+    plt.ylabel("MSE")
+    plt.title(f"MSE vs horizon ({title_suffix})")
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(out_dir / f"mse_vs_horizon_{slug}.png", dpi=160)
+    plt.close()
+
+    plt.figure(figsize=(6, 4))
+    plt.plot(horizons, [row["psnr"] for row in baseline_rows], label="baseline", linewidth=2)
+    plt.plot(horizons, [row["psnr"] for row in experiment_rows], label="rollout-aware", linewidth=2)
+    plt.xlabel("Horizon")
+    plt.ylabel("PSNR")
+    plt.title(f"PSNR vs horizon ({title_suffix})")
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(out_dir / f"psnr_vs_horizon_{slug}.png", dpi=160)
     plt.close()
 
 
