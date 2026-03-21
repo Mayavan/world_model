@@ -1,0 +1,60 @@
+experiment:
+  name: coinrun_rollout_aware
+  seed: 0
+  run_dir: ""
+  wandb:
+    project: world_model
+    entity: mayavan-projects
+    mode: online
+
+model:
+  type: latent_flow_world_model
+  autoencoder_checkpoint: runs/20260222_160838_coinrun_autoencoder/best_ckpt.pt
+  frame_channels: 3
+  action_embed_dim: 64
+  time_embed_dim: 128
+  sampling_steps: 16
+  width_mult: 1.0
+
+optimizer: {}
+
+scheduler:
+  type: onecycle
+  enabled: true
+  max_lr: 0.0005
+  pct_start: 0.3
+  div_factor: 25.0
+  final_div_factor: 10000.0
+
+data:
+  data_dir: data/coinrun_rgb
+  game: coinrun
+  batch_size: 128
+  num_workers: 2
+  prefetch_factor: 2
+  persistent_workers: true
+  pin_memory: true
+  val_ratio: 0.1
+  n_past_frames: 4
+  n_past_actions: 3
+  n_future_frames: 4
+
+train:
+  epochs: 5
+  max_steps: 0
+  grad_clip_norm: 1.0
+  weight_decay: 0.01
+  log_every: 500
+  val_every_steps: 1000
+  val_rollout_enabled: true
+  val_rollout_horizon: 32
+  val_rollout_fps: 30
+  cpu: false
+  rollout_aware:
+    enabled: true
+    loss_weight: 0.25
+    rollout_steps: 4
+    sampling_steps: 4
+    start_step: 1000
+    ramp_steps: 4000
+    max_prob: 0.5
